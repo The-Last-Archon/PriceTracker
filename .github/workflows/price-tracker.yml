@@ -59,3 +59,14 @@ jobs:
           # Secondary target: Karen Walker Speedcat, track US W9/M7.5
           echo "Running Karen Walker (size US W9/M7.5)"
           python track_price.py "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538551951726" --variant "Size=US W9/M7.5" || true
+      - name: Commit updated price_data.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add price_data.json || true
+          if ! git diff --cached --quiet; then
+            git commit -m "Update price_data.json (price-tracker)" || true
+            git push
+          else
+            echo "No changes to commit"
+          fi

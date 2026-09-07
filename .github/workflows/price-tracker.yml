@@ -1,0 +1,61 @@
+name: Price Tracker
+
+on:
+  schedule:
+    # daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Product URL to check'
+        required: false
+      size:
+        description: 'Size to track'
+        required: false
+      selector:
+        description: 'CSS selector to target price element'
+        required: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run price tracker
+        env:
+          PRICE_TRACKER_WEBHOOK: ${{ secrets.PRICE_TRACKER_WEBHOOK }}
+          # Default webhook (used if the secret is not set)
+          DEFAULT_WEBHOOK: 'https://discord.com/api/webhooks/1546453386428153926/j_yZgIl9KYvGOiZoZ7Mv-X4hZkhk6A1_Z8G1Donyjn_8w1fkG6XUVkzkv8Pp5vcM3xSH'
+          PRICE_TRACKER_SMTP_HOST: ${{ secrets.PRICE_TRACKER_SMTP_HOST }}
+          PRICE_TRACKER_SMTP_PORT: ${{ secrets.PRICE_TRACKER_SMTP_PORT }}
+          PRICE_TRACKER_SMTP_USER: ${{ secrets.PRICE_TRACKER_SMTP_USER }}
+          PRICE_TRACKER_SMTP_PASS: ${{ secrets.PRICE_TRACKER_SMTP_PASS }}
+          PRICE_TRACKER_SMTP_FROM: ${{ secrets.PRICE_TRACKER_SMTP_FROM }}
+          PRICE_TRACKER_NOTIFY_EMAIL_TO: ${{ secrets.PRICE_TRACKER_NOTIFY_EMAIL_TO }}
+          DEFAULT_URL: ${{ secrets.PRICE_TRACKER_URL }}
+          DEFAULT_SIZE: ${{ secrets.PRICE_TRACKER_SIZE }}
+          DEFAULT_SELECTOR: ${{ secrets.PRICE_TRACKER_SELECTOR }}
+        run: |
+          set -e
+          # Ensure webhook is set: prefer secret PRICE_TRACKER_WEBHOOK, fall back to DEFAULT_WEBHOOK
+          if [ -z "$PRICE_TRACKER_WEBHOOK" ] || [ "$PRICE_TRACKER_WEBHOOK" = "" ]; then
+            export PRICE_TRACKER_WEBHOOK="$DEFAULT_WEBHOOK"
+            echo "Using default webhook from workflow file"
+          else
+            echo "Using webhook from secrets"
+          fi
+
+          # Primary target: Superette Veronica Polo, but track size S (override variant)
+          echo "Running Superette (size S)"
+          python track_price.py "https://superette.co.nz/products/malbon-veronica-polo-black-onyxcream-mlbmw0228?variant=47576560075003" --size S || true
+
+          # Secondary target: Karen Walker Speedcat, track US W9/M7.5
+          echo "Running Karen Walker (size US W9/M7.5)"
+          python track_price.py "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538551951726" --variant "Size=US W9/M7.5" || true

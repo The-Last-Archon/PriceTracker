@@ -25,6 +25,9 @@ Data is stored in `price_data.json` in the working directory.
 Notifications
 -
 - Webhook: set `PRICE_TRACKER_WEBHOOK` to an HTTP endpoint to receive JSON POSTs on price change.
+ - Webhook: set `PRICE_TRACKER_WEBHOOK` to an HTTP endpoint to receive alerts when a price *drops*.
+	 - Discord: provide a Discord incoming webhook URL (e.g. `https://discord.com/api/webhooks/...`). The tracker will send a readable message to the channel when a tracked price decreases.
+	 - Other endpoints: the tracker posts a JSON payload `{"url","old_price","new_price","timestamp"}`.
 - Email (SMTP): set the following environment variables to enable email notifications:
 	- `PRICE_TRACKER_SMTP_HOST` — SMTP host
 	- `PRICE_TRACKER_SMTP_PORT` — SMTP port (default 587)

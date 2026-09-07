@@ -116,70 +116,119 @@ def parse_price_from_ldjson(soup):
 
 def parse_price_from_meta(soup):
     # common meta tags
-                    # parse variant args into dict like {Name: Value}
-                    variants = None
-                    if args.variant:
-                        variants = {}
-                        for item in args.variant:
-                            if "=" in item:
-                                name, val = item.split("=", 1)
-                                variants[name.strip()] = val.strip()
-                            else:
-                                variants[item.strip()] = ""
+    meta = soup.find("meta", attrs={"property": "product:price:amount"}) or soup.find("meta", attrs={"itemprop": "price"})
+    if meta and meta.get("content"):
+        return meta.get("content")
+    return None
 
-                    # If the URL contains a variant=ID param, try to resolve via product JSON (Shopify-style)
-                    p = urlparse(args.url)
-                    q = parse_qs(p.query)
-                    variant_id = q.get("variant", [None])[0]
 
-                    price_from_json = None
-                    resolved_variant = None
-                    if variant_id:
-                        handle, base = get_handle_and_base(args.url)
-                        if handle and base:
-                            pj = fetch_product_json(handle, base)
-                            resolved_variant = resolve_variant_from_product_json(pj, variant_id)
-                            if resolved_variant:
-                                # price in cents usually
-                                raw_price = resolved_variant.get("price") or resolved_variant.get("price_in_cents") or resolved_variant.get("compare_at_price")
-                                try:
-                                    price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
-                                except Exception:
-                                    price_from_json = None
-
-                    # If user requested a specific variant (by --variant or --size), try to resolve that via product JSON too
-                    if (variants or args.size) and not price_from_json:
-                        handle, base = get_handle_and_base(args.url)
-                        if handle and base:
-                            pj = fetch_product_json(handle, base)
-                            # build filters dict
-                            filters = {}
-                            if variants:
-                                filters.update(variants)
-                            if args.size:
-                                filters["size"] = args.size
-                            found = find_variant_by_filters(pj, filters)
-                            if found:
-                                resolved_variant = found
-                                raw_price = found.get("price")
-                                try:
-                                    price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
-                                except Exception:
-                                    price_from_json = None
-
-                    # If we found a price via JSON and no selector/variant targeting needed, use it directly
-                    if price_from_json is not None and not args.selector and not args.size and not variants:
-                        price = price_from_json
-                    else:
-                        try:
-                            html = get_html(args.url)
-                        except Exception as e:
-                            print("Failed to fetch URL:", e)
-                            sys.exit(1)
-
-                        price = extract_price(html, selector=args.selector, size=args.size, variants=variants)
+def parse_price_by_class(soup):
+    # look for elements with 'price' in class or id
+    candidates = []
+    for tag in soup.find_all(True):
+        attr = " ".join([str(x) for x in (tag.get("class") or [])]) + " " + str(tag.get("id") or "")
+        if "price" in attr.lower():
+            text = tag.get_text(strip=True)
+            if text:
                 candidates.append(text)
     return candidates[0] if candidates else None
+
+
+def extract_price(html, selector=None, size=None, variants=None):
+    soup = BeautifulSoup(html, "lxml")
+
+    # If a CSS selector is provided, try it first (precise targeting)
+    if selector:
+        el = soup.select_one(selector)
+        if el:
+            val = normalize_price_str(el.get_text())
+            if val is not None:
+                return val
+
+    # If variant filters are provided (e.g., size or color), try to find price near that label
+    if variants or size:
+        # build list of (label, value) pairs to search for; size is kept for backward compatibility
+        filters = []
+        if variants:
+            for k, v in variants.items():
+                filters.append((k, v))
+        if size:
+            filters.append(("size", size))
+
+        # For each filter value, search for text nodes that mention the value (case-insensitive), then locate nearby price
+        for label, val in filters:
+            val_re = re.compile(re.escape(str(val)), re.I)
+            for text_node in soup.find_all(string=val_re):
+                container = text_node.parent
+                # search container and nearby ancestors/descendants for price-like elements
+                candidates = []
+                # check container
+                candidates.append(container)
+                # check siblings
+                candidates.extend(list(container.next_siblings)[:3])
+                candidates.extend(list(container.previous_siblings)[:3])
+                # check ancestors
+                ancestor = container
+                for _ in range(3):
+                    if ancestor is None:
+                        break
+                    ancestor = ancestor.parent
+                    if ancestor:
+                        candidates.append(ancestor)
+
+                for node in candidates:
+                    try:
+                        # look for price-like element inside node
+                        if hasattr(node, "find_all"):
+                            # by class/id
+                            price_text = parse_price_by_class(node)
+                            if price_text:
+                                val2 = normalize_price_str(price_text)
+                                if val2 is not None:
+                                    return val2
+                        # by searching text
+                        pt = None
+                        for t in node.stripped_strings:
+                            m = re.search(r"(NZ\$|\$)\s?([0-9\.,]+)", t)
+                            if m:
+                                pt = m.group(2)
+                                break
+                        if pt:
+                            val2 = normalize_price_str(pt)
+                            if val2 is not None:
+                                return val2
+                    except Exception:
+                        continue
+
+    # try ld+json
+    price = parse_price_from_ldjson(soup)
+    if price:
+        val = normalize_price_str(price)
+        if val is not None:
+            return val
+
+    # try meta
+    price = parse_price_from_meta(soup)
+    if price:
+        val = normalize_price_str(price)
+        if val is not None:
+            return val
+
+    # try common classes
+    price = parse_price_by_class(soup)
+    if price:
+        val = normalize_price_str(price)
+        if val is not None:
+            return val
+
+    # fallback regex on raw html
+    price = parse_price_by_regex(html)
+    if price:
+        val = normalize_price_str(price)
+        if val is not None:
+            return val
+
+    return None
 
 
 def parse_price_by_regex(html):
@@ -230,32 +279,32 @@ def extract_price(html, selector=None, size=None, variants=None):
             val_re = re.compile(re.escape(str(val)), re.I)
             for text_node in soup.find_all(string=val_re):
                 container = text_node.parent
-            # search container and nearby ancestors/descendants for price-like elements
-            candidates = []
-            # check container
-            candidates.append(container)
-            # check siblings
-            candidates.extend(list(container.next_siblings)[:3])
-            candidates.extend(list(container.previous_siblings)[:3])
-            # check ancestors
-            ancestor = container
-            for _ in range(3):
-                if ancestor is None:
-                    break
-                ancestor = ancestor.parent
-                if ancestor:
-                    candidates.append(ancestor)
+                # search container and nearby ancestors/descendants for price-like elements
+                candidates = []
+                # check container
+                candidates.append(container)
+                # check siblings
+                candidates.extend(list(container.next_siblings)[:3])
+                candidates.extend(list(container.previous_siblings)[:3])
+                # check ancestors
+                ancestor = container
+                for _ in range(3):
+                    if ancestor is None:
+                        break
+                    ancestor = ancestor.parent
+                    if ancestor:
+                        candidates.append(ancestor)
 
                 for node in candidates:
-                try:
-                    # look for price-like element inside node
-                    if hasattr(node, "find_all"):
-                        # by class/id
-                        price_text = parse_price_by_class(node)
-                        if price_text:
-                            val = normalize_price_str(price_text)
-                            if val is not None:
-                                return val
+                    try:
+                        # look for price-like element inside node
+                        if hasattr(node, "find_all"):
+                            # by class/id
+                            price_text = parse_price_by_class(node)
+                            if price_text:
+                                val2 = normalize_price_str(price_text)
+                                if val2 is not None:
+                                    return val2
                         # by searching text
                         pt = None
                         for t in node.stripped_strings:
@@ -264,11 +313,11 @@ def extract_price(html, selector=None, size=None, variants=None):
                                 pt = m.group(2)
                                 break
                         if pt:
-                            val = normalize_price_str(pt)
-                            if val is not None:
-                                return val
-                except Exception:
-                    continue
+                            val2 = normalize_price_str(pt)
+                            if val2 is not None:
+                                return val2
+                    except Exception:
+                        continue
 
     # try ld+json
     price = parse_price_from_ldjson(soup)
@@ -328,17 +377,30 @@ def save_price(key, price):
         json.dump(data, f, indent=2)
 
 
-def notify_change(url, old, new):
+def notify_change(url, old, new, drop=False):
+    """Notify about a price change. Only send webhook alerts for drops (drop=True).
+
+    - Discord webhooks are formatted for human-readable messages.
+    - Other webhook endpoints receive a JSON body with url/old_price/new_price/timestamp.
+    """
     webhook = os.getenv("PRICE_TRACKER_WEBHOOK")
-    msg = {"url": url, "old_price": old, "new_price": new, "timestamp": datetime.utcnow().isoformat()}
+    timestamp = datetime.utcnow().isoformat()
+    msg = {"url": url, "old_price": old, "new_price": new, "timestamp": timestamp}
     print("Price change:", msg)
-    if webhook:
+
+    if webhook and drop:
         try:
-            requests.post(webhook, json=msg, timeout=10)
+            # Discord webhook expects a `content` or `embeds` field
+            if "discord.com/api/webhooks" in webhook:
+                content = f"📉 **Price drop**\n{url}\n{old} → {new}\n{timestamp}"
+                payload = {"content": content}
+                requests.post(webhook, json=payload, timeout=10)
+            else:
+                requests.post(webhook, json=msg, timeout=10)
         except Exception as e:
             print("Failed to POST webhook:", e)
 
-    # Optional: send email if SMTP env vars provided or NOTIFY_EMAIL_TO is set
+    # Optional: send email if SMTP env vars provided or NOTIFY_EMAIL_TO is set (still sent for any change)
     notify_to = os.getenv("PRICE_TRACKER_NOTIFY_EMAIL_TO") or os.getenv("NOTIFY_EMAIL_TO")
     smtp_host = os.getenv("PRICE_TRACKER_SMTP_HOST")
     if notify_to and smtp_host:
@@ -383,11 +445,6 @@ def main():
     parser.add_argument("--variant", action="append", help="Variant filter in the form Name=Value (case-insensitive). Repeatable.")
     args = parser.parse_args()
 
-    try:
-        html = get_html(args.url)
-    except Exception as e:
-        print("Failed to fetch URL:", e)
-        sys.exit(1)
     # parse variant args into dict like {Name: Value}
     variants = None
     if args.variant:
@@ -399,8 +456,56 @@ def main():
             else:
                 # single value - treat as unspecified name
                 variants[item.strip()] = ""
+    # If the URL contains a variant=ID param, try to resolve via product JSON (Shopify-style)
+    p = urlparse(args.url)
+    q = parse_qs(p.query)
+    variant_id = q.get("variant", [None])[0]
 
-    price = extract_price(html, selector=args.selector, size=args.size, variants=variants)
+    price_from_json = None
+    resolved_variant = None
+    if variant_id:
+        handle, base = get_handle_and_base(args.url)
+        if handle and base:
+            pj = fetch_product_json(handle, base)
+            resolved_variant = resolve_variant_from_product_json(pj, variant_id)
+            if resolved_variant:
+                raw_price = resolved_variant.get("price") or resolved_variant.get("price_in_cents") or resolved_variant.get("compare_at_price")
+                try:
+                    price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
+                except Exception:
+                    price_from_json = None
+
+    # If user requested a specific variant (by --variant or --size), try to resolve that via product JSON too
+    if (variants or args.size) and not price_from_json:
+        handle, base = get_handle_and_base(args.url)
+        if handle and base:
+            pj = fetch_product_json(handle, base)
+            # build filters dict
+            filters = {}
+            if variants:
+                filters.update(variants)
+            if args.size:
+                filters["size"] = args.size
+            found = find_variant_by_filters(pj, filters)
+            if found:
+                resolved_variant = found
+                raw_price = found.get("price")
+                try:
+                    price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
+                except Exception:
+                    price_from_json = None
+
+    # If we found a price via JSON and no selector/variant targeting needed, use it directly
+    if price_from_json is not None and not args.selector and not args.size and not variants:
+        price = price_from_json
+    else:
+        try:
+            html = get_html(args.url)
+        except Exception as e:
+            print("Failed to fetch URL:", e)
+            sys.exit(1)
+
+        price = extract_price(html, selector=args.selector, size=args.size, variants=variants)
     if price is None:
         print("Could not find price on page")
         sys.exit(2)
@@ -431,7 +536,12 @@ def main():
         return
 
     if price != last_price:
-        notify_change(args.url, last_price, price)
+        dropped = False
+        try:
+            dropped = float(price) < float(last_price)
+        except Exception:
+            dropped = False
+        notify_change(args.url, last_price, price, drop=dropped)
         save_price(key, price)
     else:
         print(f"Price unchanged: {price}")

@@ -1,14 +1,18 @@
 {
   "https://superette.co.nz/products/malbon-veronica-polo-black-onyxcream-mlbmw0228": {
-    "price": 399.0,
-    "timestamp": "2026-09-07T07:52:35.368554"
+      "price": 0.0,
+      "timestamp": "2026-09-07T09:44:45.376818"
   },
   "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538551951726::size=US W9/M7.5": {
     "price": 180.0,
     "timestamp": "2026-09-07T09:01:57.020663"
-  }
-  ,"https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538552050030::size=US W7.5/M6": {
+  },
+  "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538552050030::size=US W7.5/M6": {
     "price": 180.0,
     "timestamp": "2026-09-07T10:05:00.000000"
+  },
+  "https://superette.co.nz/products/malbon-veronica-polo-black-onyxcream-mlbmw0228?variant=47576560075003::size=S": {
+    "price": 0.0,
+    "timestamp": "2026-09-07T09:44:45.376818"
   }
 }

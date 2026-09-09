@@ -463,40 +463,38 @@ def main():
 
     price_from_json = None
     resolved_variant = None
-    if variant_id:
+
+    # Prefer explicit size/variant filters, because they are user intent and should override
+    # a variant already present in the URL.
+    if not args.selector:
         handle, base = get_handle_and_base(args.url)
         if handle and base:
             pj = fetch_product_json(handle, base)
-            resolved_variant = resolve_variant_from_product_json(pj, variant_id)
-            if resolved_variant:
-                raw_price = resolved_variant.get("price") or resolved_variant.get("price_in_cents") or resolved_variant.get("compare_at_price")
-                try:
-                    price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
-                except Exception:
-                    price_from_json = None
 
-    # If user requested a specific variant (by --variant or --size), try to resolve that via product JSON too
-    if (variants or args.size) and not price_from_json:
-        handle, base = get_handle_and_base(args.url)
-        if handle and base:
-            pj = fetch_product_json(handle, base)
-            # build filters dict
-            filters = {}
-            if variants:
-                filters.update(variants)
-            if args.size:
-                filters["size"] = args.size
-            found = find_variant_by_filters(pj, filters)
-            if found:
-                resolved_variant = found
-                raw_price = found.get("price")
-                try:
-                    price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
-                except Exception:
-                    price_from_json = None
+            if args.size or variants:
+                filters = {}
+                if variants:
+                    filters.update(variants)
+                if args.size:
+                    filters["size"] = args.size
+                found = find_variant_by_filters(pj, filters)
+                if found:
+                    resolved_variant = found
+                    raw_price = found.get("price")
+                    try:
+                        price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
+                    except Exception:
+                        price_from_json = None
+            elif variant_id:
+                resolved_variant = resolve_variant_from_product_json(pj, variant_id)
+                if resolved_variant:
+                    raw_price = resolved_variant.get("price") or resolved_variant.get("price_in_cents") or resolved_variant.get("compare_at_price")
+                    try:
+                        price_from_json = float(raw_price) / 100.0 if raw_price and float(raw_price) > 1000 else float(raw_price)
+                    except Exception:
+                        price_from_json = None
 
-    # If we found a price via JSON and no selector/variant targeting needed, use it directly
-    if price_from_json is not None and not args.selector and not args.size and not variants:
+    if price_from_json is not None:
         price = price_from_json
     else:
         try:

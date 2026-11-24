@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 import smtplib
 from email.message import EmailMessage
@@ -279,104 +279,10 @@ def normalize_price_str(s):
         return None
 
 
-def extract_price(html, selector=None, size=None, variants=None):
-    soup = BeautifulSoup(html, "lxml")
-
-    # If a CSS selector is provided, try it first (precise targeting)
-    if selector:
-        el = soup.select_one(selector)
-        if el:
-            val = normalize_price_str(el.get_text())
-            if val is not None:
-                return val
-
-    # If variant filters are provided (e.g., size or color), try to find price near that label
-    if variants or size:
-        # build list of (label, value) pairs to search for; size is kept for backward compatibility
-        filters = []
-        if variants:
-            for k, v in variants.items():
-                filters.append((k, v))
-        if size:
-            filters.append(("size", size))
-
-        # For each filter value, search for text nodes that mention the value (case-insensitive), then locate nearby price
-        for label, val in filters:
-            val_re = re.compile(re.escape(str(val)), re.I)
-            for text_node in soup.find_all(string=val_re):
-                container = text_node.parent
-                # search container and nearby ancestors/descendants for price-like elements
-                candidates = []
-                # check container
-                candidates.append(container)
-                # check siblings
-                candidates.extend(list(container.next_siblings)[:3])
-                candidates.extend(list(container.previous_siblings)[:3])
-                # check ancestors
-                ancestor = container
-                for _ in range(3):
-                    if ancestor is None:
-                        break
-                    ancestor = ancestor.parent
-                    if ancestor:
-                        candidates.append(ancestor)
-
-                for node in candidates:
-                    try:
-                        # look for price-like element inside node
-                        if hasattr(node, "find_all"):
-                            # by class/id
-                            price_text = parse_price_by_class(node)
-                            if price_text:
-                                val2 = normalize_price_str(price_text)
-                                if val2 is not None:
-                                    return val2
-                        # by searching text
-                        pt = None
-                        for t in node.stripped_strings:
-                            m = re.search(r"(NZ\$|\$)\s?([0-9\.,]+)", t)
-                            if m:
-                                pt = m.group(2)
-                                break
-                        if pt:
-                            val2 = normalize_price_str(pt)
-                            if val2 is not None:
-                                return val2
-                    except Exception:
-                        continue
-
-    # try ld+json
-    price = parse_price_from_ldjson(soup)
-    if price:
-        val = normalize_price_str(price)
-        if val is not None:
-            return val
-
-    # try meta
-    price = parse_price_from_meta(soup)
-    if price:
-        val = normalize_price_str(price)
-        if val is not None:
-            return val
-
-    # try common classes
-    price = parse_price_by_class(soup)
-    if price:
-        val = normalize_price_str(price)
-        if val is not None:
-            return val
-
-    # fallback regex on raw html
-    price = parse_price_by_regex(html)
-    if price:
-        val = normalize_price_str(price)
-        if val is not None:
-            return val
-
-    return None
-
-
 DATA_FILE = "price_data.json"
+
+
+PROMOTION_DAYS = int(os.getenv("PRICE_PROMOTION_DAYS", "15"))
 
 
 def load_last(key):
@@ -385,12 +291,29 @@ def load_last(key):
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data.get(key)
+        record = data.get(key)
+        if not record:
+            return None
+
+        # Migrate the previous price-only format automatically.
+        if "price" in record:
+            record = {
+                "original": record["price"],
+                "current": record["price"],
+                "timestamp": record.get("timestamp"),
+                "drop_since": None,
+            }
+        else:
+            record.setdefault("original", record.get("current"))
+            record.setdefault("current", record.get("original"))
+            record.setdefault("timestamp", datetime.utcnow().isoformat())
+            record.setdefault("drop_since", None)
+        return record
     except Exception:
         return None
 
 
-def save_price(key, price):
+def save_price(key, original, current, drop_since=None):
     data = {}
     if os.path.exists(DATA_FILE):
         try:
@@ -398,53 +321,61 @@ def save_price(key, price):
                 data = json.load(f)
         except Exception:
             data = {}
-    data[key] = {"price": price, "timestamp": datetime.utcnow().isoformat()}
+
+    data[key] = {
+        "original": original,
+        "current": current,
+        "timestamp": datetime.utcnow().isoformat(),
+        "drop_since": drop_since,
+    }
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
-def notify_change(url, old, new, drop=False):
-    """Notify about a price change. Only send webhook alerts for drops (drop=True).
+def parse_timestamp(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
 
-    - Discord webhooks are formatted for human-readable messages.
-    - Other webhook endpoints receive a JSON body with url/old_price/new_price/timestamp.
-    """
+
+def notify_change(url, original, current, drop=False):
+    """Notify with original/current prices. A lower current price always alerts."""
     webhook = os.getenv("PRICE_TRACKER_WEBHOOK")
     timestamp = datetime.utcnow().isoformat()
-    msg = {"url": url, "old_price": old, "new_price": new, "timestamp": timestamp}
+    msg = {"url": url, "original": original, "current": current, "timestamp": timestamp}
     print("Price change:", msg)
 
     if webhook and drop:
         try:
-            # Discord webhook expects a `content` or `embeds` field
             if "discord.com/api/webhooks" in webhook:
-                content = f"📉 **Price drop**\n{url}\n{old} → {new}\n{timestamp}"
-                payload = {"content": content}
-                requests.post(webhook, json=payload, timeout=10)
+                content = f"📉 **Price drop**\n{url}\nOriginal: {original} → Current: {current}\n{timestamp}"
+                requests.post(webhook, json={"content": content}, timeout=10)
             else:
                 requests.post(webhook, json=msg, timeout=10)
         except Exception as e:
             print("Failed to POST webhook:", e)
 
-    # Optional: send email if SMTP env vars provided or NOTIFY_EMAIL_TO is set (still sent for any change)
     notify_to = os.getenv("PRICE_TRACKER_NOTIFY_EMAIL_TO") or os.getenv("NOTIFY_EMAIL_TO")
     smtp_host = os.getenv("PRICE_TRACKER_SMTP_HOST")
     if notify_to and smtp_host:
         try:
-            send_email_notification(notify_to, url, old, new)
+            send_email_notification(notify_to, url, original, current)
         except Exception as e:
             print("Failed to send email notification:", e)
 
 
-def send_email_notification(to_addrs, url, old, new):
+def send_email_notification(to_addrs, url, original, current):
     smtp_host = os.getenv("PRICE_TRACKER_SMTP_HOST")
     smtp_port = int(os.getenv("PRICE_TRACKER_SMTP_PORT", "587"))
     smtp_user = os.getenv("PRICE_TRACKER_SMTP_USER")
     smtp_pass = os.getenv("PRICE_TRACKER_SMTP_PASS")
     from_addr = os.getenv("PRICE_TRACKER_SMTP_FROM") or smtp_user or "price-tracker@example.com"
 
-    subject = f"Price changed: {old} → {new}"
-    body = json.dumps({"url": url, "old_price": old, "new_price": new, "timestamp": datetime.utcnow().isoformat()}, indent=2)
+    subject = f"Price lower: {original} → {current}"
+    body = json.dumps({"url": url, "original": original, "current": current, "timestamp": datetime.utcnow().isoformat()}, indent=2)
 
     email = EmailMessage()
     email["From"] = from_addr
@@ -452,7 +383,6 @@ def send_email_notification(to_addrs, url, old, new):
     email["Subject"] = subject
     email.set_content(body)
 
-    # Try TLS then fallback to plain
     with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as s:
         s.ehlo()
         if smtp_port == 587:
@@ -555,24 +485,39 @@ def main():
             key = f"{args.url}::variant={variant_id}"
 
     last = load_last(key)
-    last_price = last.get("price") if last else None
 
-    if last_price is None:
+    if last is None:
         print(f"Current price: {price} (no previous record)")
-        save_price(key, price)
+        save_price(key, price, price, None)
         return
 
-    if price != last_price:
-        dropped = False
-        try:
-            dropped = float(price) < float(last_price)
-        except Exception:
-            dropped = False
-        notify_change(args.url, last_price, price, drop=dropped)
-        save_price(key, price)
+    try:
+        original = float(last["original"])
+    except (KeyError, TypeError, ValueError):
+        original = float(last.get("current", price))
+
+    current = float(price)
+    drop_since = parse_timestamp(last.get("drop_since"))
+    now = datetime.utcnow()
+
+    if current < original:
+        if drop_since is None:
+            drop_since = now
+
+        # Repeated alert while the current price remains below the original baseline.
+        notify_change(args.url, original, current, drop=True)
+
+        if now - drop_since >= timedelta(days=PROMOTION_DAYS):
+            print(f"Lower price held for {PROMOTION_DAYS} days; promoting it to original: {current}")
+            original = current
+            drop_since = None
+
+        save_price(key, original, current, drop_since.isoformat() if drop_since else None)
+        print(f"Original: {original}; Current: {current}")
     else:
-        print(f"Price unchanged: {price}")
-        save_price(key, price)
+        # No longer a lower price, so reset the sustained-drop timer.
+        save_price(key, original, current, None)
+        print(f"Original: {original}; Current: {current}")
 
 
 if __name__ == "__main__":

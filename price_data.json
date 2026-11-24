@@ -1,22 +1,32 @@
 {
   "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538551951726::size=US W9/M7.5": {
-    "price": 180.0,
-    "timestamp": "2026-09-07T09:01:57.020663"
+    "original": 180.0,
+    "current": 180.0,
+    "timestamp": "2026-09-07T09:01:57.020663",
+    "drop_since": null
   },
   "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538552050030::size=US W7.5/M6": {
-    "price": 180.0,
-    "timestamp": "2026-09-07T10:05:00.000000"
+    "original": 180.0,
+    "current": 180.0,
+    "timestamp": "2026-09-07T10:05:00.000000",
+    "drop_since": null
   },
   "https://superette.co.nz/products/malbon-veronica-polo-black-onyxcream-mlbmw0228?variant=47576560075003::size=S": {
-    "price": 399.0,
-    "timestamp": "2026-09-09T00:05:25.505645"
+    "original": 399.0,
+    "current": 399.0,
+    "timestamp": "2026-09-09T00:05:25.505645",
+    "drop_since": null
   },
   "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538551951726::variant=Size=US W9/M7.5": {
-    "price": 180.0,
-    "timestamp": "2026-09-08T23:52:30.803571"
+    "original": 180.0,
+    "current": 180.0,
+    "timestamp": "2026-09-08T23:52:30.803571",
+    "drop_since": null
   },
   "https://www.karenwalker.com/products/speedcat-mule-satin-puma-black?variant=54538552050030::variant=Size=US W7.5/M6": {
-    "price": 180.0,
-    "timestamp": "2026-11-24T06:14:16.584413"
+    "original": 180.0,
+    "current": 180.0,
+    "timestamp": "2026-11-24T06:14:16.584413",
+    "drop_since": null
   }
 }

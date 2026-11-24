@@ -81,3 +81,16 @@ python track_price.py "<product-url>" --variant "Color=Black" --variant "Size=M"
 
 The tracker will search for the provided variant text on the page and then try to read a nearby price. Stored keys include the variant pairs so different variants are tracked separately.
 
+Price history behavior
+-
+-Each tracked item stores:
+  - `original`: the baseline price used to detect drops.
+  - `current`: the latest successfully fetched price.
+  - `timestamp`: the latest successful run time.
+  - `drop_since`: when the price first fell below `original`, or `null` otherwise.
+
+- Every run sends a drop alert if `current < original`.
+- A sustained lower price starts a 15-day timer through `drop_since`.
+- After 15 consecutive days below `original`, the lower `current` price becomes the new `original`. Set `PRICE_PROMOTION_DAYS` to override the 15-day period.
+- If the price returns to or rises above `original`, `drop_since` resets.
+

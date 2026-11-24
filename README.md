@@ -89,7 +89,7 @@ Price history behavior
   - `timestamp`: the latest successful run time.
   - `drop_since`: when the price first fell below `original`, or `null` otherwise.
 
-- Every run sends a drop alert if `current < original`.
+- Sends one drop alert when a price first falls below `original`. Further runs during the same drop do not repeat the alert; the timer resets if the price returns to or exceeds `original`.
 - A sustained lower price starts a 15-day timer through `drop_since`.
 - After 15 consecutive days below `original`, the lower `current` price becomes the new `original`. Set `PRICE_PROMOTION_DAYS` to override the 15-day period.
 - If the price returns to or rises above `original`, `drop_since` resets.

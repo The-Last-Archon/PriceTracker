@@ -501,11 +501,12 @@ def main():
     now = datetime.utcnow()
 
     if current < original:
+        first_drop_detection = drop_since is None
         if drop_since is None:
             drop_since = now
 
-        # Repeated alert while the current price remains below the original baseline.
-        notify_change(args.url, original, current, drop=True)
+        if first_drop_detection:
+            notify_change(args.url, original, current, drop=True)
 
         if now - drop_since >= timedelta(days=PROMOTION_DAYS):
             print(f"Lower price held for {PROMOTION_DAYS} days; promoting it to original: {current}")

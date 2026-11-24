@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 import smtplib
@@ -13,10 +14,35 @@ from bs4 import BeautifulSoup
 
 
 def get_html(url, headers=None, timeout=15):
-    headers = headers or {"User-Agent": "Mozilla/5.0 (compatible; PriceTracker/1.0)"}
-    resp = requests.get(url, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    return resp.text
+    headers = headers or {
+        "User-Agent": "Mozilla/5.0 (compatible; PriceTracker/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+
+    # Retry brief 429 responses, but cap every wait and make the attempt count finite.
+    for attempt in range(3):
+        try:
+            print(f"Fetching page (attempt {attempt + 1}/3)...")
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                try:
+                    delay = min(float(retry_after), 10.0) if retry_after else 2 * (attempt + 1)
+                except (TypeError, ValueError):
+                    delay = 2 * (attempt + 1)
+                if attempt < 2:
+                    print(f"Rate limited; retrying in {delay:g} seconds...")
+                    time.sleep(delay)
+                    continue
+            resp.raise_for_status()
+            return resp.text
+        except requests.RequestException as e:
+            if attempt == 2:
+                raise
+            print(f"Request failed ({e}); retrying...")
+            time.sleep(2 * (attempt + 1))
+
+    raise RuntimeError("Failed to fetch URL after retries")
 
 
 def get_handle_and_base(url):
@@ -507,6 +533,9 @@ def main():
     if price is None:
         print("Could not find price on page")
         sys.exit(2)
+    if price <= 0:
+        print("Invalid price returned:", price)
+        sys.exit(3)
     # Use a composite key when tracking specific selector/size
     key = args.url
     # compose storage key with selector/size/variants or resolved variant id to separate variants
@@ -543,6 +572,7 @@ def main():
         save_price(key, price)
     else:
         print(f"Price unchanged: {price}")
+        save_price(key, price)
 
 
 if __name__ == "__main__":
